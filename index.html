@@ -134,7 +134,7 @@ img { display: block; max-width: 100%; }
 .win.is-dusk .lot img.bg.dusk { opacity: 1; }
 .lot .car { position: absolute; transform: translate(-50%, -100%); }
 .lot .car img { width: 100%; filter: drop-shadow(0 6px 4px rgba(0, 0, 0, .35)); }
-.lot .car .tagx { position: absolute; left: 50%; top: -6px; transform: translate(-50%, -100%); background: var(--paper); border-radius: 6px; padding: 1px 6px; font-size: 18px; font-weight: 700; white-space: nowrap; box-shadow: 0 2px 3px rgba(0, 0, 0, .3); }
+.lot .car .tagx { position: absolute; left: 50%; top: -6px; transform: translate(-50%, -100%); background: var(--paper); border-radius: 6px; padding: 1px 6px; font-size: var(--tag, 18px); font-weight: 700; white-space: nowrap; box-shadow: 0 2px 3px rgba(0, 0, 0, .3); }
 .lot .car .tagx.res { background: var(--cherry); color: #fff; }
 .lot .car .tagx.wait { background: #E8ECEF; color: var(--ink-2); }
 .lot .car.incoming img { opacity: .35; filter: grayscale(1) drop-shadow(0 4px 3px rgba(0, 0, 0, .25)); }
@@ -152,7 +152,7 @@ img { display: block; max-width: 100%; }
 .item img { width: 100%; filter: drop-shadow(0 8px 6px rgba(20, 30, 40, .35)); transition: transform .15s ease; }
 .item:active img { transform: scale(.96); }
 .item .lab {
-  position: absolute; left: 50%; bottom: -8px; transform: translate(-50%, 100%); white-space: nowrap;
+  position: absolute; left: 50%; bottom: 2px; transform: translate(-50%, 0); white-space: nowrap; pointer-events: none;
   font-size: 23px; font-weight: 600; background: var(--paper); padding: 2px 10px; border-radius: 6px;
   box-shadow: 0 2px 0 rgba(31, 42, 58, .2); color: var(--ink);
 }
@@ -7431,11 +7431,17 @@ const SND = (function () {
   }
 
   // ---------- Сцена ----------
+  // Паркувальні місця на фото майданчика (%): x — середина розміченого місця, y — де стоять колеса, w — ширина найдовшої машини.
+  // Коротші машини менші пропорційно до справжньої довжини (CAR_LEN), тож «Жук» не більший за «Кадилак» і кожна стоїть у своїх лініях.
   const SLOTS = {
-    lot1: [{ x: 35, y: 75, w: 31 }, { x: 68, y: 77, w: 31 }],
-    lot2: [{ x: 22, y: 77, w: 25 }, { x: 48, y: 79, w: 26 }, { x: 76, y: 81, w: 26 }, { x: 52, y: 58, w: 17 }, { x: 71, y: 59, w: 17 }],
-    lot3: [{ x: 24, y: 79, w: 21 }, { x: 43, y: 80, w: 21 }, { x: 62, y: 81, w: 21 }, { x: 82, y: 82, w: 21 }, { x: 39, y: 59, w: 14 }, { x: 52, y: 59, w: 14 }, { x: 66, y: 60, w: 14 }, { x: 80, y: 60, w: 14 }]
+    lot1: [{ x: 37, y: 71, w: 25 }, { x: 66.5, y: 74, w: 25 }],
+    lot2: [{ x: 18, y: 76.5, w: 25 }, { x: 43, y: 80, w: 26 }, { x: 73.5, y: 82.5, w: 26 }, { x: 47, y: 60, w: 17 }, { x: 70, y: 60.5, w: 17 }],
+    lot3: [{ x: 17, y: 76.5, w: 21 }, { x: 33, y: 80, w: 22 }, { x: 56, y: 82, w: 23 }, { x: 80, y: 83.5, w: 23 }, { x: 29, y: 60, w: 15 }, { x: 47, y: 60.5, w: 15 }, { x: 62.5, y: 61, w: 15 }, { x: 78, y: 61.5, w: 15 }]
   };
+  // Довжина моделей, м (для розміру на майданчику)
+  const CAR_LEN = { chevy53: 5.0, ford55: 5.0, pickup: 4.9, buick: 5.2, cadillac: 5.5, belair57: 5.0, wagon: 5.4, impala: 5.3, cad59: 5.7,
+    falcon: 4.6, beetle: 4.1, f100: 4.8, mustang: 4.6, vwbus: 4.3, camaro: 4.8, cad68: 5.7, pinto: 4.1, datsun: 4.1 };
+  const carW = (c, sl) => +(sl.w * (CAR_LEN[c.fam] || 5.2) / 5.7).toFixed(2);
   SLOTS.lot60 = SLOTS.lot3; SLOTS.lot70 = SLOTS.lot3;
   function lotKey() { const si = E.seasonInfo(S); if (si.career && si.lot) return si.lot; return S.up.salon ? 'lot3' : S.up.expand ? 'lot2' : 'lot1'; }
   function officeKey() { const si = E.seasonInfo(S); if (si.career && si.office) return si.office; return S.up.salon ? 'office3' : 'office1'; }
@@ -7453,7 +7459,31 @@ const SND = (function () {
     return Object.values(S.people).filter(p => p.status === 'lead' && (p.waiting || p.newOffer) && E.contactInfo(S, p).canCall)
       .sort((a, b) => (E.contactInfo(S, b).offer ? 1 : 0) - (E.contactInfo(S, a).offer ? 1 : 0));
   }
+  // Розкладка речей на столі (% сцени 720×1080; x — середина, y — де річ стоїть, w — ширина).
+  // Задній ряд — дрібні речі однією лінією, кожна на своєму місці; середній — календар, газета, каса, радіо; передній — телефон, блокнот, довідник,
+  // між ними — угода й дзвоник. У салоні (office3, office70) стіл у перспективі: ряди йдуть паралельно його краю.
+  const DESK_BACK = [['plant', 8], ['camera', 8.5], ['trophy', 6.5], ['postcards', 8], ['letters', 8.5], ['cardindex', 8], ['mechanic', 7], ['photo', 6.5], ['cashbox', 8.5], ['assist', 9.5], ['lamp', 8]];
+  const DESK = {};
+  function deskPos(off) {
+    if (DESK[off]) return DESK[off];
+    const salon = off !== 'office1', P = {};
+    DESK_BACK.forEach(([k, w], i) => { const x = +(10.5 + i * 7.9).toFixed(1); P[k] = [x, salon ? +(56.5 + 0.07 * x).toFixed(1) : 67.5, w]; });
+    if (salon) {
+      const ym = x => +(66 + 0.07 * x).toFixed(1), yf = x => +(69.5 + 0.21 * x).toFixed(1);
+      Object.assign(P, { calendar: [13.5, ym(13.5), 14], newspaper: [33, ym(33), 17], ledger: [58, ym(58), 13], radio: [82, ym(82), 17],
+        contract: [22, yf(22), 8], phone: [44, yf(44), 19], bell: [56, yf(56), 8.5], notebook: [67, yf(67), 16], directory: [85.5, yf(85.5), 17] });
+    } else {
+      Object.assign(P, { calendar: [14, 78, 16], newspaper: [36, 78, 19.5], ledger: [58.5, 78, 15.5], radio: [81.5, 78, 21],
+        phone: [17.5, 91.5, 24], contract: [34, 91.5, 8.5], notebook: [50, 91.5, 19.5], bell: [66.5, 91.5, 9.5], directory: [83, 91.5, 20] });
+    }
+    return (DESK[off] = P);
+  }
   function deskItems() {
+    const L = deskItemsRaw(), P = deskPos(officeKey());
+    for (const it of L) { const p = P[it.k]; if (p) { it.x = p[0]; it.y = p[1]; it.w = p[2]; } }
+    return L;
+  }
+  function deskItemsRaw() {
     const inb = S.inbound.length, vis = S.visitors.length;
     const today = E.todaysMeetings(S).length;
     const iss = S.issues.filter(i => i.st === 'open').length;
@@ -7483,7 +7513,7 @@ const SND = (function () {
     if (S.postcards > 0) L.push({ k: 'postcards', img: 'o_postcards', x: 31, y: 54, w: 10, decor: 'Листівок лишилося: ' + S.postcards + '. Їх можна подарувати після передачі машини.' });
     if (S.deposits > 0) L.push({ k: 'cashbox', img: 'o_cashbox', x: 64, y: 86.5, w: 14, lab: 'Завдатки', s: 'ledger', small: true, badge: '' });
     if (unread) L.push({ k: 'letters', img: 'o_letters', x: 45, y: 64.5, w: 12, lab: 'Пошта', s: 'mail', badge: unread, small: true });
-    if (vis) L.push({ k: 'bell', img: 'o_bell', x: 64, y: 99, w: 12, lab: 'Відвідувач', s: 'phone', badge: vis, pulse: true });
+    if (vis) L.push({ k: 'bell', img: 'o_bell', x: 64, y: 99, w: 12, lab: 'Відвідувач', s: 'phone', badge: vis, pulse: true, small: true });
     if (S.staff.some(s => s.role === 'assistant')) L.push({ k: 'assist', img: 'u_assistdesk', x: 82, y: 57, w: 20, lab: 'Команда', s: 'team', small: true });
     return L;
   }
@@ -7526,11 +7556,12 @@ const SND = (function () {
       const st = { reserved: ['Резерв', 'res'], incoming: ['Прибуде', 'wait'], repair: ['Ремонт', 'wait'], inspect: ['Огляд', 'wait'], order: ['Замовлення', 'res'] }[c.status];
       const back = sl.y < 70;
       const tag = st ? `<span class="tagx ${st[1]}">${st[0]}</span>` : (!c.docs ? (back ? '' : '<span class="tagx wait">Документи</span>') : (back ? '' : `<span class="tagx">${esc($$(c.price))}</span>`));
-      return `<div class="car ${c.status === 'incoming' ? 'incoming' : ''}" style="left:${sl.x}%;top:${sl.y}%;width:${sl.w}%">${tag}<img src="${src(c.sprite)}" alt="${esc(E.carLabel(c))}"></div>`;
+      return `<div class="car ${c.status === 'incoming' ? 'incoming' : ''}" style="left:${sl.x}%;top:${sl.y}%;width:${carW(c, sl)}%">${tag}<img src="${src(c.sprite)}" alt="${esc(E.carLabel(c))}"></div>`;
     }).join('');
     let ups = '';
-    if (S.up.neon) ups += `<div class="up neon" style="left:9%;top:76%;width:17%"><img src="${src('u_neon')}" alt=""><div class="neon-text" style="font-size:${Math.round(lw * 0.17 * 0.16)}px">Авто 250</div></div>`;
-    else if (S.up.sign) ups += `<div class="up" style="left:9%;top:74%;width:16%"><img src="${src('u_sign')}" alt=""><div class="sign-text" style="font-size:${Math.round(lw * 0.16 * 0.13)}px">Вживані<br>авто</div></div>`;
+    // Вивіска стоїть у лівому куті позаду першого місця, щоб не перекривати машин і цінників
+    if (S.up.neon) ups += `<div class="up neon" style="left:10%;top:61.5%;width:14%"><img src="${src('u_neon')}" alt=""><div class="neon-text" style="font-size:${Math.round(lw * 0.14 * 0.16)}px">Авто 250</div></div>`;
+    else if (S.up.sign) ups += `<div class="up" style="left:10%;top:61%;width:13%"><img src="${src('u_sign')}" alt=""><div class="sign-text" style="font-size:${Math.round(lw * 0.13 * 0.13)}px">Вживані<br>авто</div></div>`;
     if (S.up.garage) ups += `<div class="up" style="left:${lk === 'lot1' ? 93 : 92}%;top:${lk === 'lot1' ? 66 : 63}%;width:${lk === 'lot1' ? 18 : 20}%"><img src="${src('u_garage')}" alt=""></div>`;
     if (S.up.wash) ups += `<div class="up" style="left:91%;top:97%;width:9%"><img src="${src('u_wash')}" alt=""></div>`;
     const dusk = S.time <= 1;
@@ -7545,7 +7576,7 @@ const SND = (function () {
     sc.innerHTML = `<div style="width:${720 * s}px;height:${1080 * s}px;position:relative;flex:none">
       <div class="stage" style="transform:scale(${s})">
         <button class="win ${dusk ? 'is-dusk' : ''}" data-act="sheet" data-s="lot" aria-label="Майданчик: ${S.cars.length} з ${S.lotCap} місць" style="left:${wx}px;top:${wy}px;width:${ww}px;height:${wh}px">
-          <div class="lot" style="left:${lx}px;top:${ly}px;width:${lw}px;height:${lh}px">
+          <div class="lot" style="left:${lx}px;top:${ly}px;width:${lw}px;height:${lh}px;--tag:${Math.round(lw * 0.031)}px">
             <img class="bg" src="${src(lk + '_day')}" alt=""><img class="bg dusk" src="${src(lk + '_dusk')}" alt="">
             ${ups}${carHTML}${empty}
           </div>${rain ? '<div class="rain"></div>' : ''}
