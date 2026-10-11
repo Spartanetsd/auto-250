@@ -297,6 +297,7 @@ img { display: block; max-width: 100%; }
 .lcar .ptile .bdg { width: 40px; height: 40px; margin-bottom: 2px; }
 .lcar .ptile .pl { font-weight: 600; font-size: 11px; letter-spacing: -.1px; }
 .lcar .ptile .cost { font-size: 10.5px; font-weight: 700; color: var(--cherry-d); }
+.lcar .ptile .note { font-size: 10.5px; font-weight: 600; color: var(--turq-d); }
 .lcar .ptile.off .bdg { filter: grayscale(1); opacity: .45; }
 .lcar .ptile.off .cost { color: #A8987A; }
 .lcar button.ptile { border-style: solid; border-color: rgba(31, 42, 58, .22); cursor: pointer; box-shadow: 0 1px 0 rgba(255, 255, 255, .7) inset, 0 2px 0 rgba(31, 42, 58, .12); font-family: inherit; }
@@ -1510,7 +1511,7 @@ const C = (function () {
 
   const UPGRADES = {
     sign: { name: 'Вивіска', price: 150, lvl: 2, img: 'u_sign', effect: 'Ще один шанс на відвідувача кожні 3 дні' },
-    wash: { name: 'Набір для мийки', price: 80, lvl: 2, img: 'u_wash', effect: 'Мийка: краща подача на показі (5 $ і 1 од. часу)' },
+    wash: { name: 'Набір для мийки', price: 80, lvl: 2, img: 'u_wash', effect: 'Мийка: краща подача на показі (5 $ і 1 од. часу). Машина чиста 5 днів; знову помити можна в останній чистий день' },
     mech: { name: 'Домовленість із механіком', price: 50, lvl: 3, img: 'o_mechanic', effect: 'Огляди (25 $, результат наступного дня) і ремонт' },
     cardindex: { name: 'Картотека', price: 120, lvl: 4, img: 'o_cardindex', effect: 'Фільтр обіцянок і погоджених контактів, нагадування' },
     postcards: { name: 'Друковані листівки (10 шт.)', price: 40, lvl: 4, img: 'o_postcards', effect: 'Подяка й нагадування: +задоволеність, частіші рекомендації', stack: true },
@@ -2544,12 +2545,12 @@ const E = (function (C) {
     if (['incoming'].includes(car.status)) return err('Машина ще не прибула.');
     if (kind === 'wash') {
       if (!S.up.wash) return err('Потрібен набір для мийки (рівень 2).');
-      if (car.washed >= S.day + 2) return err('Машина вже чиста.');
+      if (car.washed > S.day) return err('Машина ще чиста — до ' + dateStr(car.washed, false) + '. Помити знову можна в її останній чистий день.');
       if (S.cash < 5) return err('Мийка коштує 5 $ — у касі немає й цього.');
       const e = spend(S, 1); if (e) return err(e);
       led(S, 'Мийка: ' + carLabel(car), -5, -5, 'prep');
       car.washed = S.day + 4;
-      return ok('Хром сяє. Найближчі дні показ виглядатиме краще.');
+      return ok('Хром сяє: машина чиста до ' + dateStr(car.washed, false) + '. На показі вона виглядатиме краще.');
     }
     if (kind === 'photo') {
       if (car.photo) return err('Фото вже є.');
@@ -8180,18 +8181,22 @@ const SND = (function () {
         : { cost: 'з рівня 3', dis: true }) },
       study: { done: c.studied, act: !c.studied && { cost: '1 од.' } }
     };
-    if (S.up.wash) st.wash = { done: c.washed >= S.day, act: c.washed < S.day + 2 && { cost: '5 $ · 1 од.', confirm: true } };
+    if (S.up.wash) {
+      // Мийка тримається до c.washed включно; знову помити можна лише в останній чистий день (на завтра) або коли машина брудна
+      const left = c.washed - S.day;
+      st.wash = { done: left >= 0, note: left > 0 ? 'ще ' + left + ' ' + plural(left, 'день', 'дні', 'днів') : left === 0 ? 'до вечора' : '', act: left <= 0 && { cost: '5 $ · 1 од.', confirm: true } };
+    }
     if (!daily) st.photo = { done: c.photo, act: !c.photo && { cost: '1 од.' } };
     if (S.flags.belts) st.belts = { done: c.belts, act: !c.belts && c.status === 'stock' && { cost: $$(E.beltCost(S)) + ' · 1 од.', confirm: true } };
     return PREP.filter(p => st[p[0]]).map(([k, img, lab, labDone, full]) => {
       const s = st[k];
       let act = inc ? null : s.act || null;
       if (act && daily && S.time <= 2) act = Object.assign({}, act, { dis: true });
-      return { k, img, lab: s.done ? labDone : lab, full, done: !!s.done, wait: !!s.wait, act };
+      return { k, img, lab: s.done ? labDone : lab, full, done: !!s.done, wait: !!s.wait, note: s.note || '', act };
     });
   }
   function prepTile(c, t) {
-    const inner = `${badge(t.img)}<span class="pl">${esc(t.lab)}</span>`;
+    const inner = `${badge(t.img)}<span class="pl">${esc(t.lab)}</span>${t.note ? `<span class="note">${esc(t.note)}</span>` : ''}`;
     if (t.act) {
       const cls = ['ptile', t.done ? 'done' : '', t.act.dis ? '' : t.act.cls || '', t.act.confirm ? 'confirm' : ''].filter(Boolean).join(' ');
       return `<button class="${cls}" data-act="prep" data-c="${c.id}" data-k="${t.k}" title="${esc(t.full)}" ${t.act.dis ? 'disabled' : ''}>${inner}<span class="cost">${esc(t.act.cost)}</span></button>`;
