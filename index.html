@@ -51,19 +51,29 @@ img { display: block; max-width: 100%; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }
 
 /* ---------- Титул ---------- */
-.title { position: absolute; inset: 0; background: #0d1522; overflow: hidden; }
-.title img.bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 50% 80%; }
-.title .shade { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(13, 21, 34, .2) 0%, rgba(13, 21, 34, 0) 30%, rgba(13, 21, 34, 0) 55%, rgba(13, 21, 34, .82) 82%); }
-.logo { position: absolute; left: 0; right: 0; top: calc(6vh + var(--safe-t)); text-align: center; color: var(--paper); }
+.title { position: absolute; inset: 0; background: #0d1522; overflow: hidden; display: flex; flex-direction: column; }
+/* Сцена з картинкою зверху, меню — окремою темною панеллю знизу, щоб машину не закривали кнопки */
+.title .tscene { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; background: #13213A; }
+.title img.bg { position: absolute; left: 0; top: 0; width: 100%; height: auto; max-width: none;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 7%); mask-image: linear-gradient(180deg, transparent 0, #000 7%); }
+.title .shade { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(180deg, rgba(13, 21, 34, .28) 0%, rgba(13, 21, 34, 0) 30%, rgba(13, 21, 34, 0) 88%, #0d1522 100%); }
+.logo { position: absolute; left: 0; right: 0; top: calc(5vh + var(--safe-t)); text-align: center; color: var(--paper); }
 .logo .num {
   font-size: clamp(92px, 30vw, 140px); line-height: .9; font-weight: 700; font-style: italic; letter-spacing: -2px;
   background: linear-gradient(180deg, #FFFFFF 0%, #E3E8EC 40%, #7D8893 50%, #DDE3E8 66%, #FFFFFF 100%);
   -webkit-background-clip: text; background-clip: text; color: transparent;
   filter: drop-shadow(0 3px 0 rgba(23, 33, 48, .55)) drop-shadow(0 0 18px rgba(242, 176, 76, .35));
 }
-.logo .sub { font-size: clamp(22px, 6.4vw, 30px); font-weight: 600; margin-top: 4px; text-shadow: 0 2px 8px rgba(0, 0, 0, .55); }
-.logo .tag { font-size: 15px; font-style: italic; opacity: .9; margin-top: 6px; text-shadow: 0 1px 6px rgba(0, 0, 0, .6); }
-.title .menu { position: absolute; left: 20px; right: 20px; bottom: calc(24px + var(--safe-b)); display: grid; gap: 10px; }
+.logo .sub { font-size: clamp(22px, 6.4vw, 30px); font-weight: 600; margin-top: 4px; text-shadow: 0 2px 3px rgba(0, 0, 0, .7), 0 0 14px rgba(13, 21, 34, .85); }
+.logo .tag { font-size: 15px; font-style: italic; opacity: .95; margin-top: 6px; text-shadow: 0 1px 2px rgba(0, 0, 0, .85), 0 0 12px rgba(13, 21, 34, .9); }
+.title .menu { position: relative; flex: none; display: grid; gap: 8px; padding: 6px 20px calc(16px + var(--safe-b)); background: #0d1522; }
+.title.tight .logo { top: calc(2.5vh + var(--safe-t)); }
+.title.tight .logo .num { font-size: clamp(64px, 21vw, 96px); }
+.title.tight .logo .sub { font-size: clamp(19px, 5.4vw, 24px); margin-top: 2px; }
+.title.tight .logo .tag { display: none; }
+.title.tighter .logo .num { font-size: 58px; }
+.title.tighter .logo .sub { font-size: 19px; }
+@media (max-height: 600px) { .title .menu .note { display: none !important; } }
 .title .note { color: #DCC79C; font-size: 13px; text-align: center; margin-top: 2px; }
 .title .menu .row { align-items: stretch; }
 .title .menu .row .btn { padding-left: 6px; padding-right: 6px; }
@@ -7264,20 +7274,40 @@ const SND = (function () {
     const saved = loadSaved();
     const P = loadProf();
     app.innerHTML = `<div class="col"><div class="title">
-      <img class="bg" src="${src('title')}" alt="Вечірній майданчик вживаних авто 1957 року">
+      <div class="tscene"><img class="bg" src="${src('title')}" alt="Вечірній майданчик вживаних авто 1957 року">
       <div class="shade"></div>
-      <div class="logo"><div class="num">250</div><div class="sub">Автомобілі та довіра</div><div class="tag">Містечко в Америці, весна 1957-го</div></div>
+      <div class="logo"><div class="num">250</div><div class="sub">Автомобілі та довіра</div><div class="tag">Містечко в Америці, весна 1957-го</div></div></div>
       <div class="menu">
         ${saved ? `<button class="btn red" data-act="cont">Продовжити: ${saved.career ? (saved.career.over ? 'вільний режим, ' + E.yearOf(saved.day) : 'сезон ' + C.SEASONS[saved.career.si].year + (saved.career.wait ? ' завершено' : ', день ' + Math.max(1, saved.day - saved.career.start + 1))) : 'день ' + saved.day}, рівень ${saved.level}</button>` : ''}
-        <button class="btn ${saved ? '' : 'red'}" data-act="new">${saved ? 'Почати нову кампанію' : 'Почати кампанію'}</button>
+        <button class="btn ${saved ? 'ghost small' : 'red'}" data-act="new">${saved ? 'Почати нову кампанію' : 'Почати кампанію'}</button>
         ${(() => { const dk = dailyKey(), r = P.daily.res[dk], st = +P.daily.streak || 0, live = P.daily.last === dk || P.daily.last === prevKey(dk); return `<button class="btn turq dailybtn" data-act="daily"><b>Покупець дня №${dailyNum(dk)}</b><small>${r ? starStr(r.stars) + ' · результат і листівка' : esc(dayLabel(dk)) + ' · один покупець для всіх'}${live && st >= 2 ? ' · серія ' + st : ''}</small></button>`; })()}
         <div class="row"><button class="btn ghost small grow" data-act="sheet" data-s="tech">Техніки ${P.tech.length}/9</button><button class="btn ghost small grow" data-act="sheet" data-s="help">Як грати</button><button class="btn ghost small grow" data-act="import">Завантажити</button></div>
         ${(() => { const b = loadBest(); return b ? `<div class="note best"><img src="${src(['', 'r_bronze', 'r_silver', 'r_gold'][b.tier] || 'r_bronze')}" alt="" style="${b.tier ? '' : 'display:none'}">Рекорд: ${esc(C.STARS[b.tier])} · ${b.sales} машин · ${$$(b.profit)}</div>` : ''; })()}
         ${Object.keys(P.endings).length ? `<div class="note">Фінали: ${Object.keys(P.endings).length} з 4 · ${C.STYLE_ORDER.filter(k => P.endings[k]).map(k => '«' + esc(C.STYLES[k].name) + '»').join(', ')}</div>` : ''}
         ${(() => { const cb = loadCareerBest(); return cb ? `<div class="note best cbest"><span>Кар'єра 1957–1977</span><span class="rosx">${cb.tiers.map(t => t ? `<img class="mini" src="${src(ROSETTE[t])}" alt="">` : '<i class="mini0"></i>').join('')}</span><span>«своїх» ${cb.share}%</span></div>` : ''; })()}
-        <div class="note">Прогрес зберігається в цьому браузері автоматично.</div>
+        ${saved ? '' : '<div class="note">Прогрес зберігається в цьому браузері автоматично.</div>'}
       </div></div><div id="sheetL"></div><div id="modalL"></div><div class="toasts" id="toasts"></div></div>`;
     UI.saved = saved;
+    const im = app.querySelector('.title img.bg');
+    if (im && !im.complete) im.addEventListener('load', fitTitle, { once: true });
+    fitTitle();
+  }
+  // Титул: машина з картинки завжди над меню. У кадрі 720×1080 машина займає 54–87 % висоти й майже всю ширину,
+  // тож картинку ставимо на всю ширину й зсуваємо вгору, поки низ машини не стане над меню (небо згори можна зрізати).
+  // На високому екрані згори лишається смуга — її заповнює колір неба. Якщо логотип налазить на машину — менший логотип.
+  function fitTitle() {
+    const t = app.querySelector('.title'), sc = t && t.querySelector('.tscene'), im = sc && sc.querySelector('img.bg'), logo = sc && sc.querySelector('.logo');
+    if (!im || !logo) return;
+    t.classList.remove('tight', 'tighter');
+    const W = sc.clientWidth, H = sc.clientHeight;
+    const h = W * ((im.naturalWidth && im.naturalHeight / im.naturalWidth) || 1.5);
+    const top = h >= H ? Math.max(H - h, Math.min(0, H - 0.9 * h)) : H - h;
+    im.style.top = Math.round(top) + 'px';
+    const carTop = top + 0.53 * h;
+    for (const cls of ['tight', 'tighter']) {
+      if (logo.offsetTop + logo.offsetHeight <= carTop - 4) break;
+      t.classList.add(cls);
+    }
   }
 
   // Нова кампанія: якщо техніки вже відкриті — спершу вибір до трьох
@@ -9236,7 +9266,7 @@ const SND = (function () {
     if (el.dataset.act !== 'veil') e.preventDefault();
     try { f(el.dataset, e); } catch (err) { console.error(err); toast('Помилка: ' + err.message, 'err'); }
   });
-  window.addEventListener('resize', () => { if (S) renderScene(); });
+  window.addEventListener('resize', () => { if (S) renderScene(); else fitTitle(); });
   window.__game = { get S() { return S; }, E, UI, ACT, refresh };
 
   title();
