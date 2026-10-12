@@ -2112,7 +2112,7 @@ const E = (function (C) {
   function carReady(S, car) { return car.status === 'stock' && car.docs; }
   function carBlocked(S, car) {
     if (car.status === 'incoming') return 'прибуде ' + whenStr(S, car.readyDay);
-    if (car.status === 'repair') return 'у ремонті до ' + dateStr(car.readyDay, false);
+    if (car.status === 'repair') return 'у ремонті до ' + dateStr(car.readyDay, false) + (car.reservedFor && S.people[car.reservedFor] ? ' (резерв: ' + S.people[car.reservedFor].name + ')' : '');
     if (car.status === 'inspect') return 'на огляді до ранку';
     if (car.status === 'reserved') return 'у резерві' + (S.people[car.reservedFor] ? ': ' + S.people[car.reservedFor].name : '');
     if (car.status === 'order') return 'закріплена за замовленням';
@@ -2301,8 +2301,9 @@ const E = (function (C) {
     const honest = honestMove(S, pr);
     let due = pr.due + (pr.kind === 'service' ? 2 : 1);
     if (pr.kind === 'meet') {
-      due = (honest ? [pr.due + 2, pr.due + 1, pr.due + 3] : [pr.due + 1]).find(x => meetLoad(S, x) < 2 && x <= lastDay(S));
-      if (!due) return err('Наступного дня вже дві зустрічі — перенести нікуди.');
+      // Завтра зайнято — домовляємося на найближчий вільний день (до трьох днів уперед)
+      due = (honest ? [pr.due + 2, pr.due + 1, pr.due + 3] : [pr.due + 1, pr.due + 2, pr.due + 3]).find(x => meetLoad(S, x) < 2 && x <= lastDay(S));
+      if (!due) return err('Найближчі три дні вже розписано по дві зустрічі — перенести нікуди.');
     }
     const d = honest ? 0 : Math.round(rk(S, 'resch:' + pr.id) * 3);
     if (p) trust(S, p, -d, 'перенесення за домовленістю');
@@ -2322,7 +2323,7 @@ const E = (function (C) {
     if (pr.kind === 'handover') {
       const deal = S.deals.find(x => x.id === pr.dealId), car = S.cars.find(c => c.id === pr.carId);
       if (deal && !deal.handed && !deal.canceled) { deal.canceled = true; deal.voided = true; if (deal.deposit) S.deposits -= deal.deposit; }
-      if (car && car.status === 'reserved') { car.status = 'stock'; car.reservedFor = null; car.deposit = 0; car.dealId = null; }
+      if (car && (car.status === 'reserved' || car.reservedFor)) { if (car.status === 'reserved') car.status = 'stock'; car.reservedFor = null; car.deposit = 0; car.dealId = null; }
     }
     if (p && p.status === 'lead') {
       p.follow = null; p.waiting = false; p.newOffer = false;
@@ -2651,6 +2652,12 @@ const E = (function (C) {
     const car = S.cars.find(c => c.id === carId);
     if (!car) return err('Машини немає на майданчику.');
     if (['incoming'].includes(car.status)) return err('Машина ще не прибула.');
+    // Машина в механіка (ремонт чи огляд): мити й фотографувати — коли повернеться на майданчик
+    if ((kind === 'wash' || kind === 'photo') && (car.status === 'repair' || car.status === 'inspect')) {
+      const what = kind === 'wash' ? 'Помити' : 'Сфотографувати';
+      return err(car.status === 'repair' ? 'Машина в ремонті до ' + dateStr(car.readyDay, false) + '. ' + what + ' її можна, коли механік закінчить.'
+        : 'Машина на огляді до ранку. ' + what + ' її можна завтра.');
+    }
     if (kind === 'wash') {
       if (!S.up.wash) return err('Потрібен набір для мийки (рівень 2).');
       if (car.washed > S.day) return err('Машина ще чиста — до ' + dateStr(car.washed, false) + '. Помити знову можна в її останній чистий день.');
@@ -2742,7 +2749,8 @@ const E = (function (C) {
     const d = car.defects[idx];
     if (!d || !d.known || d.fixed) return err('Немає відомого дефекту для ремонту.');
     if (d.nofix) return err('Скручений пробіг не відремонтуєш: його можна лише чесно назвати покупцеві.');
-    if (car.status !== 'stock') return err('Машина зараз недоступна.');
+    // Зарезервовану машину теж можна полагодити до передачі: резерв і завдаток лишаються за покупцем
+    if (car.status !== 'stock' && car.status !== 'reserved') return err('Машина зараз недоступна: ' + carBlocked(S, car) + '.');
     if (S.cash < d.cost) return err('Не вистачає грошей: потрібно ' + fmt$(d.cost) + '.');
     led(S, 'Ремонт: ' + d.name + ' (' + carLabel(car) + ')', -d.cost, 0, 'repair');
     car.prep += d.cost;
@@ -2751,13 +2759,16 @@ const E = (function (C) {
     if (mech) days -= 1;
     if (S.mode === 'daily') days = 0;
     if (days <= 0) { finishRepair(S, car); return ok(edName(S) + ' полагодив одразу: ' + d.name + '.'); }
+    const reserved = car.status === 'reserved';
     car.status = 'repair';
     car.readyDay = S.day + days;
-    return ok('Машина в ремонті до ' + dateStr(car.readyDay, false) + '. До завершення її не можна передати покупцю.');
+    const hp = reserved ? S.promises.find(x => x.st === 'open' && x.kind === 'handover' && x.carId === car.id) : null;
+    return ok('Машина в ремонті до ' + dateStr(car.readyDay, false) + '. До завершення її не можна передати покупцю.' +
+      (hp && hp.due < car.readyDay ? ' Передачу ' + whenStr(S, hp.due) + ' доведеться перенести за згодою.' : ''));
   }
   function finishRepair(S, car) {
     car.defects.forEach(d => { if (d.fixing) { d.fixing = false; d.fixed = true; car.cond = clamp(car.cond + (d.sev === 'major' ? 12 : 5), 0, 98); } });
-    car.status = 'stock';
+    car.status = car.reservedFor && S.deals.some(d => d.id === car.dealId && !d.handed && !d.canceled) ? 'reserved' : 'stock';
     car.price = Math.max(car.price, retailFor(car.fam, car.cond, S));
     if (car.kind === 'own') car.min = car.cost + car.prep;
   }
@@ -2767,7 +2778,7 @@ const E = (function (C) {
     const min = carMin(car);
     price = r25(price);
     if (price < min) return err('Нижче мінімальної ціни (' + fmt$(min) + ') продавати не можна.');
-    if (car.status === 'reserved') return err('Ціну зарезервованої машини вже погоджено.');
+    if (car.status === 'reserved' || car.reservedFor) return err('Ціну зарезервованої машини вже погоджено.');
     car.price = price;
     return ok('Нова ціна: ' + fmt$(price) + '.');
   }
@@ -4278,7 +4289,7 @@ const E = (function (C) {
     if (!car) return err('Машини немає.');
     if (p.doubt === 'salary' && S.day < p.doubtDay) return err(p.name + ' ' + gv(p, 'прийде', 'прийде', 'прийдуть') + ' ' + whenStr(S, p.doubtDay) + ' — тоді ' + gv(p, 'в нього', 'в неї', 'в них') + ' будуть гроші.');
     if (!car.docs) return err('Спершу перевірте документи машини (підготовка, 1 од.).');
-    if (car.status === 'repair') return err('Машина ще в ремонті.');
+    if (car.status === 'repair') return err('Машина ще в ремонті — до ' + dateStr(car.readyDay, false) + '. Передати ключі можна, коли механік закінчить.');
     if (S.cash + deal.price - (deal.tradeIn || 0) - (car.kind === 'com' ? car.payout : 0) < 0) return err('Не вистачає грошей: з виручки треба виплатити власнику ' + fmt$(car.payout) + ', а частину ціни покупець платить старим авто.');
     const e = spend(S, 1); if (e) return err(e);
     const pr = S.promises.find(x => x.id === deal.prid);
@@ -4372,7 +4383,8 @@ const E = (function (C) {
     const mech = S.up.mech || S.staff.some(s => s.role === 'mechanic');
     // З технікою «На вашому боці в сервісі» ремонт за зверненням удвічі дешевший
     const k = has(S, 'service') ? 0.5 : 1;
-    out.push({ id: 'explain', label: 'Пояснити користування', cost: 0 });
+    // Пояснення, яке вже не допомогло, удруге не пропонуємо: це лише час і довіра
+    if (!is.explained) out.push({ id: 'explain', label: 'Пояснити користування', cost: 0 });
     if (!is.diagnosed && mech) out.push({ id: 'check', label: 'Направити до ' + edName(S, 'gen') + ' на перевірку (25 $)', cost: 25 });
     if (!mech && is.type !== 'usage' && is.defect) {
       const city = Math.max(25, r25((is.defect.cost * 1.2 + 10) * k));
@@ -4404,7 +4416,7 @@ const E = (function (C) {
     let msg = '';
     if (opt === 'explain') {
       if (is.type === 'usage') { resolveIssue(S, is, 5, 4); msg = 'Ви пояснили, як рушати з першої. ' + p.name + ' полегшено ' + pv(p, 'засміявся') + '.'; }
-      else { trust(S, p, -2, 'просте пояснення не усунуло дефекту'); msg = 'Пояснення не допомогло: проблема справжня. Потрібна перевірка або ремонт.'; is.due = Math.max(is.due, S.day + 1); if (pr) pr.due = is.due; }
+      else { trust(S, p, -2, 'просте пояснення не усунуло дефекту'); is.explained = true; msg = 'Пояснення не допомогло: проблема справжня. Потрібна перевірка або ремонт.'; is.due = Math.max(is.due, S.day + 1); if (pr) pr.due = is.due; }
     } else if (opt === 'check') {
       led(S, 'Перевірка за зверненням: ' + p.name, -25, -25, 'service');
       is.diagnosed = true; is.due = S.day + 2; if (pr) { pr.due = is.due; }
@@ -4620,13 +4632,13 @@ const E = (function (C) {
     stale(S, k, opt) {
       const car = S.cars.find(c => c.id === k.carId);
       if (!car) return ok('');
+      if (opt === 'ad') { const r = placeAd(S, car.id); if (!r.ok) return r; car.flaggedStale = true; return ok('Оголошення замовлено.'); }
       car.flaggedStale = true;
       if (opt === 'price') {
         const np = Math.max(carMin(car), r25(car.price * 0.94));
         car.price = np;
-        return ok('Нова ціна: ' + fmt$(np) + '.');
+        return ok(np < k.price0 ? 'Нова ціна: ' + fmt$(np) + '.' : 'Ціна вже на мінімумі: ' + fmt$(np) + '. Нижче — собі в збиток.');
       }
-      if (opt === 'ad') { const r = placeAd(S, car.id); return r.ok ? ok('Оголошення замовлено.') : r; }
       return ok('Залишили як є.');
     },
     conflict(S, k, opt) { return ok(''); },
@@ -5141,7 +5153,7 @@ const E = (function (C) {
       S.tense = true;
     } else if (key === 'stale') {
       pushEvent(S, 'stale', {
-        title: 'Машина застоялася', img: 'ev_stale', carId: stale.id,
+        title: 'Машина застоялася', img: 'ev_stale', carId: stale.id, price0: stale.price,
         text: carLabel(stale) + ' стоїть уже ' + (S.day - stale.arrived) + ' днів. Вона займає місце й заморожує гроші. Що робимо?',
         options: [{ id: 'price', label: 'Знизити ціну на 6% (не нижче мінімуму)' }, { id: 'ad', label: 'Дати оголошення (30 $)' }, { id: 'keep', label: 'Залишити як є' }]
       });
@@ -5555,7 +5567,7 @@ const E = (function (C) {
   function orderUnassign(S, oid, carId) {
     const o = S.orders.find(x => x.id === oid && x.st === 'signed');
     const car = S.cars.find(c => c.id === carId);
-    if (!o || !car) return err('?');
+    if (!o || !car || !o.cars.includes(carId) || car.status !== 'order') return err('Ця машина не закріплена за замовленням.');
     o.cars = o.cars.filter(x => x !== carId); car.status = 'stock'; car.orderId = null;
     return ok('Машину відкріплено.');
   }
@@ -5700,7 +5712,7 @@ const E = (function (C) {
         if (deal && !deal.handed) {
           if (rk(S, 'cancel:' + deal.id) < 0.5 && !has(S, 'thanks')) {
             S.deposits -= deal.deposit; deal.canceled = true;
-            if (car) { car.status = 'stock'; car.reservedFor = null; car.deposit = 0; car.dealId = null; }
+            if (car) { if (car.status === 'reserved') car.status = 'stock'; car.reservedFor = null; car.deposit = 0; car.dealId = null; }
             if (p) { p.status = 'closed'; p.closedUntil = S.day + 30; }
             hist(S, (p ? p.name + ' ' + pv(p, 'скасував') : 'Покупець скасував') + ' угоду. Завдаток повернуто.');
           } else {
@@ -6300,7 +6312,7 @@ const E = (function (C) {
       d.canceled = true; d.voided = true;
       if (d.deposit) S.deposits -= d.deposit;
       const car = S.cars.find(c => c.id === d.carId);
-      if (car) { car.status = 'stock'; car.reservedFor = null; car.deposit = 0; car.dealId = null; }
+      if (car) { if (car.status === 'reserved') car.status = 'stock'; car.reservedFor = null; car.deposit = 0; car.dealId = null; }
       inter.canceled++;
     }
     for (const pr of S.promises) if (pr.st === 'open') pr.st = 'void';
@@ -7051,7 +7063,7 @@ const E = (function (C) {
     if (Math.abs(cashSum - S.cash) > 0.01) probs.push('Каса не сходиться з журналом: ' + S.cash + ' vs ' + cashSum);
     const profSum = S.ledger.reduce((s, l) => s + l.p, 0);
     if (Math.abs(profSum - S.netProfit) > 0.01) probs.push('Прибуток не сходиться: ' + S.netProfit + ' vs ' + profSum);
-    const dep = S.cars.filter(c => c.status === 'reserved').reduce((s, c) => s + c.deposit, 0);
+    const dep = S.cars.filter(c => c.status === 'reserved' || (c.status === 'repair' && c.reservedFor)).reduce((s, c) => s + c.deposit, 0);
     if (dep !== S.deposits) probs.push('Завдатки не сходяться: ' + S.deposits + ' vs ' + dep);
     const ids = new Set();
     for (const c of S.cars) { if (ids.has(c.id)) probs.push('Машина двічі: ' + c.id); ids.add(c.id); }
@@ -7116,7 +7128,9 @@ const E = (function (C) {
     recoveryOptions, recover, endDay, goalCheck, summaryData, continueFree, famsUnlocked, pv, gv, speech,
     meetingFit, honestMove, needLine, wallData, campaignStars, techProgress, techCheck, campaignStyle, homes, mapData,
     createDaily, dailyResult, askLimit, inPoly, dateOf, yearOf, dayOfDate,
-    talkReview, readiness, careerNext, careerBegin, invest, investState, investPrice, seasonInfo, seasonGoals, seasonStats, setTech, staffInfo, heroImg, ownDeal, famPool, priceK, beltCost, edName, catLevel, lastDay, seasonEndText, marketLevel, profitGoal
+    talkReview, readiness, careerNext, careerBegin, invest, investState, investPrice, seasonInfo, seasonGoals, seasonStats, setTech, staffInfo, heroImg, ownDeal, famPool, priceK, beltCost, edName, catLevel, lastDay, seasonEndText, marketLevel, profitGoal,
+    // Для перевірок (tools/): прямий доступ до внутрішніх кроків
+    _test: { led, makeCar, orderFam, addVisitor, openIssue, pushEvent }
   };
 })(typeof C !== 'undefined' ? C : require('./content.js'));
 if (typeof module !== 'undefined') module.exports = E;
@@ -7632,10 +7646,15 @@ const SND = (function () {
 
   // Підготовка машини з головної кнопки: картка машини відкривається, і крок одразу виконано (результат видно на картці)
   function prepNow(id, k) { openSheet('lot', id); ACT.prep({ c: id, k }); }
-  // Чи є в довіднику відкритих районів людина, якій можна зробити холодний дзвінок
-  function anyCallable() {
-    return C.DIST_ORDER.some(k => E.districtOpen(S, k) && E.dirPeople(S, k).some(p => p.status !== 'lead' && p.status !== 'customer' && !E.canCall(S, p)));
+  // Район довідника, де є людина, якій можна зробити холодний дзвінок (спершу — відкритий зараз)
+  const callableIn = k => E.districtOpen(S, k) && E.dirPeople(S, k).some(p => p.status !== 'lead' && p.status !== 'customer' && !E.canCall(S, p));
+  function callableDist() {
+    if (UI.dirTab && UI.dirTab !== 'map' && callableIn(UI.dirTab)) return UI.dirTab;
+    return C.DIST_ORDER.find(callableIn) || null;
   }
+  function anyCallable() { return !!callableDist(); }
+  // «Знайти покупців»: довідник відкривається на районі, де є кому подзвонити
+  function openDirectory() { const d = callableDist(); if (d) UI.dirTab = d; openSheet('directory'); }
 
   // ---------- Наступна справа ----------
   // Одна справа, яку варто зробити зараз: її пише головна кнопка, поруч із потрібною річчю — бульбашка, і світиться лише ця річ.
@@ -7647,39 +7666,47 @@ const SND = (function () {
     const t = S.people.teacher;
     if (S.day === 1 && t && t.status === 'lead' && !t.met && !S.meetings.some(m => m.pid === 'teacher' && m.st === 'plan') && S.time >= 1)
       return { key: 'callT', k: 'phone', ring: true, btn: 'Подзвонити Мері Еллен', cost: '1 од.', hint: 'Мері Еллен чекає дзвінка: учора вона питала про перше авто.', run: () => { openSheet('phone'); ACT.callT(); } };
-    if (S.visitors.length && S.time >= 2) {
-      const v = S.visitors[0], p = S.people[v.pid];
-      if (p) {
-        const block = E.canMeet(S) || (E.meetLoad(S, S.day) >= 2 ? 'busy' : null);
-        return { key: 'vis:' + p.id, fig: p.id, k: 'phone', btn: 'Поговорити: ' + short(p), cost: block ? '' : '2 од.', hint: esc(p.name) + ' ' + E.gv(p, 'роздивляється', 'роздивляється', 'роздивляються') + ' машини на майданчику.', run: () => block ? openSheet('phone') : ACT.meet({ p: p.id }) };
-      }
-    }
+    // Спершу обіцяна зустріч (це обіцянка), потім відвідувач; кому не вистачає часу чи місця — перенести або запросити на завтра
     const tm = E.todaysMeetings(S);
-    if (tm.length && S.time >= 2 && S.meetsToday < 2) {
+    if (tm.length) {
       const p = S.people[tm[0].pid];
       const block = E.canMeet(S);
-      return { key: 'meet:' + p.id, fig: p.id, k: 'phone', btn: 'Почати зустріч: ' + short(p), cost: block ? '' : '2 од.', hint: 'Сьогодні зустріч: ' + esc(p.name) + '.', run: () => block ? openSheet('phone') : ACT.meet({ p: p.id }) };
+      if (!block) return { key: 'meet:' + p.id, fig: p.id, k: 'phone', btn: 'Почати зустріч: ' + short(p), cost: '2 од.', hint: 'Сьогодні зустріч: ' + esc(p.name) + '.', run: () => ACT.meet({ p: p.id }) };
+      // Зустріч не відбудеться: краще чесно перенести, ніж мовчки пропустити
+      const pr = S.promises.find(x => x.id === tm[0].prid && x.st === 'open');
+      const canMove = [1, 2, 3].some(d => E.meetLoad(S, S.day + d) < 2 && S.day + d <= E.lastDay(S));
+      if (pr && !pr.moved && canMove) return { key: 'meetm:' + p.id, fig: p.id, k: 'calendar', btn: 'Перенести зустріч: ' + short(p), hint: (S.meetsToday >= 2 ? 'Дві зустрічі сьогодні вже були' : 'На зустріч уже бракує часу') + ' — перенесіть зустріч із ' + esc(short(p)) + ' за згодою, інакше обіцянку буде пропущено.', run: () => ACT.resched({ id: pr.id }) };
+    }
+    const tomorrowFree = E.meetLoad(S, S.day + 1) < 2 && S.day + 1 <= E.lastDay(S);
+    for (const v of S.visitors) {
+      const p = S.people[v.pid]; if (!p) continue;
+      const block = E.canMeet(S) || (E.meetLoad(S, S.day) >= 2 ? 'busy' : null);
+      if (!block) return { key: 'vis:' + p.id, fig: p.id, k: 'phone', btn: 'Поговорити: ' + short(p), cost: '2 од.', hint: esc(p.name) + ' ' + E.gv(p, 'роздивляється', 'роздивляється', 'роздивляються') + ' машини на майданчику.', run: () => ACT.meet({ p: p.id }) };
+      if (tomorrowFree) return { key: 'visl:' + p.id, fig: p.id, k: 'phone', btn: 'Запросити на завтра: ' + short(p), hint: (S.time < 2 ? 'На розмову вже бракує часу' : 'Сьогодні вже дві зустрічі') + ' — запросіть ' + esc(short(p)) + ' на завтра, щоб не втратити покупця.', run: () => ACT.later({ p: p.id }) };
     }
     const hd = handTask();
     if (hd && S.time >= 1) return hd;
-    if (S.inbound.length) { const p = S.people[S.inbound[0].pid]; return { key: 'inb', k: 'phone', btn: S.inbound.length > 1 ? 'Вхідні дзвінки: ' + S.inbound.length : 'Вхідний дзвінок: ' + short(p), hint: 'Дзвонили покупці — призначте зустрічі.', run: () => openSheet('phone') }; }
+    if (S.inbound.length && canSched()) { const p = S.people[S.inbound[0].pid]; return { key: 'inb', k: 'phone', btn: S.inbound.length > 1 ? 'Вхідні дзвінки: ' + S.inbound.length : 'Вхідний дзвінок: ' + short(p), hint: 'Дзвонили покупці — призначте зустрічі.', run: () => openSheet('phone') }; }
     const is = S.issues.find(i => i.st === 'open');
     if (is && S.time >= 1) { const p = S.people[is.pid]; return { key: 'iss:' + is.id, k: 'phone', btn: 'Звернення: ' + short(p), hint: esc(p.name) + ' ' + E.gv(p, 'чекає', 'чекає', 'чекають') + ' відповіді на звернення.', run: () => openSheet('phone') }; }
-    if (S.comOffer) return { key: 'com', k: 'phone', btn: 'Машина на комісію', hint: 'Вам пропонують машину на комісію.', run: () => openSheet('phone') };
+    if (S.comOffer) return { key: 'com', k: 'phone', btn: 'Машина на комісію', hint: E.freeSlots(S) < 1 ? 'Вам пропонують машину на комісію, але майданчик повний: відмовтеся або звільніть місце.' : 'Вам пропонують машину на комісію.', run: () => openSheet('phone') };
     const nodocs = S.cars.find(c => c.status === 'stock' && !c.docs);
     if (nodocs && S.time >= 1) return { key: 'docs:' + nodocs.id, car: nodocs.id, btn: 'Перевірити документи', cost: '1 од.', hint: 'Перевірте документи: ' + esc(E.carLabel(nodocs)) + '. Без них машину не продати.', run: () => prepNow(nodocs.id, 'docs') };
     const fu = E.followUps(S)[0];
     if (fu && S.time >= 1) return { key: 'fu:' + fu.id, k: 'phone', btn: 'Подзвонити: ' + short(fu), cost: '1 од.', hint: 'Час обіцяного дзвінка: ' + esc(fu.name) + '.', run: () => ACT.followup({ p: fu.id }) };
     const wo = waitingLeads().find(p => E.contactInfo(S, p).offer);
     if (wo && S.time >= 1) return { key: 'wo:' + wo.id, k: 'phone', btn: 'Запропонувати: ' + short(wo), cost: '1 од.', hint: esc(wo.name) + ' ' + E.gv(wo, 'чекає', 'чекає', 'чекають') + ' машину, і у вас є що запропонувати.', run: () => ACT.followup({ p: wo.id }) };
-    if (!S.cars.length && S.level >= 2 && S.time >= 1) return { key: 'buy', k: 'newspaper', btn: 'Купити машину', hint: 'Майданчик порожній: у газеті — машини на продаж.', run: () => openSheet('paper') };
+    // Продавати нічого (усі машини в резерві чи за замовленням): у газеті є що купити
+    const sellable = S.cars.some(c => !c.reservedFor && c.status !== 'order');
+    if (!sellable && S.level >= 2 && S.time >= 1 && E.freeSlots(S) >= 1 && S.offers.some(o => o.price <= S.cash))
+      return { key: 'buy', k: 'newspaper', btn: 'Купити машину', cost: '1 од.', hint: (S.cars.length ? 'Вільних машин для продажу немає' : 'Майданчик порожній') + ': у газеті — машини на продаж.', run: () => openSheet('paper') };
     if (S.time === 0) return end;
     if (si.canStart) return { key: 'career', k: 'ledger', btn: 'Кар\'єра 1957–1977', hint: 'Кампанію 1957-го завершено. Кар\'єра триває до 1977-го — у касі.', run: () => openSheet('ledger') };
     // Вільний час: спершу вивчити машину (на зустрічі буде що показати), потім шукати покупців, якщо на завтра ще є місце
     const ns = S.cars.find(c => c.status === 'stock' && c.docs && !c.studied);
     if (ns) return { key: 'study:' + ns.id, car: ns.id, btn: 'Вивчити машину', cost: '1 од.', hint: 'Вільний час: вивчіть ' + esc(E.carLabel(ns)) + ' — на зустрічі ви знатимете, що показати.', run: () => prepNow(ns.id, 'study') };
     if ((S.day <= 3 || (S.cars.some(c => c.status === 'stock') && E.meetLoad(S, S.day + 1) < 2)) && anyCallable())
-      return { key: 'dir', k: 'directory', btn: 'Знайти покупців', cost: !S.callBlock || S.callBlock.done ? '1 од.' : '', hint: 'Вільний час: подзвоніть людям із довідника — так знаходять нових покупців.', run: () => openSheet('directory') };
+      return { key: 'dir', k: 'directory', btn: 'Знайти покупців', cost: !S.callBlock || S.callBlock.done ? '1 од.' : '', hint: 'Вільний час: подзвоніть людям із довідника — так знаходять нових покупців.', run: openDirectory };
     return end;
   }
 
@@ -7769,6 +7796,8 @@ const SND = (function () {
     const ppl = [];
     for (const v of S.visitors) ppl.push({ pid: v.pid, kind: 'vis' });
     if (S.time >= 2 && S.meetsToday < 2) for (const m of E.todaysMeetings(S)) if (!ppl.some(x => x.pid === m.pid)) ppl.push({ pid: m.pid, kind: 'meet' });
+    // Людина наступної справи — завжди серед двох, що стоять біля машин
+    if (task && task.fig) { const i = ppl.findIndex(x => x.pid === task.fig); if (i > 1) ppl.unshift(ppl.splice(i, 1)[0]); else if (i < 0 && S.people[task.fig]) ppl.unshift({ pid: task.fig, kind: 'meet' }); }
     ppl.slice(0, 2).forEach((q, i) => {
       const p = S.people[q.pid]; if (!p) return;
       let a = cars.length ? cars[(hsh(q.pid) + i) % cars.length] : null;
@@ -8018,6 +8047,8 @@ const SND = (function () {
       </div></div>${fill}`;
     requestAnimationFrame(() => {
       for (const p of [lot, clock, board, goal]) if (p.after) p.after(sc);
+      // Якщо людину справи на майданчику не видно — світиться телефон
+      if (task.fig && task.k && !sc.querySelector('.fig.focus')) { const it = sc.querySelector('.item[data-k="' + task.k + '"]'); if (it) it.classList.add('focus'); }
       placeTip(sc, task, visible);
     });
     if (task.ring && visible && UI.rang !== S.day) { UI.rang = S.day; SND.play('ring'); }
@@ -8118,15 +8149,21 @@ const SND = (function () {
     if (p.src === 'ref' && p.refBy) chips.push('<span class="chip turq">' + ico('b_referral') + ' Рекомендація</span>');
     return `<div class="person ${open ? 'open' : ''}">${av(p)}<div><div class="nm">${esc(p.name)}</div><div class="oc">${esc(p.occ)}${p.met ? ' · ' + esc(typeLabel(p).toLowerCase()) : ''}</div><div>${chips.join('')}</div>${extra || ''}</div></div>`;
   }
-  function dayPicker(pid, srcKind, opts) {
-    opts = opts || {};
-    const days = [0, 1, 2, 3].map(d => S.day + d);
-    return `<div class="seg">${days.map((d, i) => {
+  // Дні для призначення зустрічі: сьогодні й три наступні; якщо всі зайняті — найближчий вільний день протягом тижня
+  function schedDays() {
+    const ok = (d, i) => E.meetLoad(S, d) < 2 && d <= E.lastDay(S) && !(i === 0 && (S.time < 2 + E.todaysMeetings(S).length * 2 || S.meetsToday >= 2));
+    const days = [0, 1, 2, 3].map(d => S.day + d).map((d, i) => ({ d, i, ok: ok(d, i) }));
+    if (!days.some(x => x.ok)) for (let d = S.day + 4; d <= Math.min(S.day + 7, E.lastDay(S)); d++) if (E.meetLoad(S, d) < 2) { days.push({ d, i: d - S.day, ok: true }); break; }
+    return days;
+  }
+  const canSched = () => schedDays().some(x => x.ok);
+  function dayPicker(pid, srcKind) {
+    const days = schedDays();
+    const none = !days.some(x => x.ok);
+    return `<div class="seg">${days.map(({ d, i, ok }) => {
       const load = E.meetLoad(S, d);
-      const needT = i === 0 ? 2 + E.todaysMeetings(S).length * 2 : 0;
-      const dis = load >= 2 || d > E.lastDay(S) || (i === 0 && (S.time < needT || S.meetsToday >= 2));
-      return `<button ${dis ? 'disabled style="opacity:.4"' : ''} data-act="sched" data-p="${pid}" data-d="${d}" data-src="${srcKind || ''}">${i === 0 ? 'Сьогодні' : i === 1 ? 'Завтра' : esc(E.dateStr(d))}${load ? ' (' + load + ')' : ''}</button>`;
-    }).join('')}</div>`;
+      return `<button ${ok ? '' : 'disabled style="opacity:.4"'} data-act="sched" data-p="${pid}" data-d="${d}" data-src="${srcKind || ''}">${i === 0 ? 'Сьогодні' : i === 1 ? 'Завтра' : esc(E.dateStr(d))}${load ? ' (' + load + ')' : ''}</button>`;
+    }).join('')}</div>${none ? '<div class="muted">Найближчий тиждень розписано: по дві зустрічі щодня' + (S.day + 4 > E.lastDay(S) ? ', а далі сезон закінчується' : '') + '. Звільніть день — перенесіть якусь зустріч за згодою.</div>' : ''}`;
   }
 
   const SHEETS = {
@@ -8159,7 +8196,7 @@ const SND = (function () {
         for (const pr of hand) {
           const p = S.people[pr.pid];
           const car = S.cars.find(c => c.id === pr.carId);
-          const blocked = car && !car.docs ? 'Спершу перевірте документи машини.' : (p.doubt === 'salary' && S.day < p.doubtDay ? p.name + ' ' + E.gv(p, 'прийде', 'прийде', 'прийдуть') + ' ' + E.whenStr(S, p.doubtDay) + '.' : '');
+          const blocked = car && car.status === 'repair' ? 'Машина в ремонті до ' + E.dateStr(car.readyDay, false) + ' — передача після ремонту.' : car && !car.docs ? 'Спершу перевірте документи машини.' : (p.doubt === 'salary' && S.day < p.doubtDay ? p.name + ' ' + E.gv(p, 'прийде', 'прийде', 'прийдуть') + ' ' + E.whenStr(S, p.doubtDay) + '.' : '');
           b += personRow(p, `<div class="muted">Передача ${car ? esc(E.carLabel(car)) : ''} — ${esc(E.whenStr(S, pr.due))}. Завдаток отримано й відкладено до передачі.</div><div class="row wrap" style="margin-top:8px">
             <button class="btn turq small confirm" data-act="handover" data-d="${pr.dealId}" ${blocked || pr.due > S.day + 0 && !(p.doubt !== 'salary' || S.day >= p.doubtDay) ? 'disabled' : ''}>Передати ключі <span class="cost">1 од.</span></button>
             ${pr.moved ? '' : `<button class="btn small" data-act="resched" data-id="${pr.id}">${pr.due + 1 > E.lastDay(S) ? 'Попередити: сезон закінчується' : 'Перенести'}</button>`}</div>${blocked ? `<div class="muted">${esc(blocked)}</div>` : ''}`);
@@ -8173,7 +8210,7 @@ const SND = (function () {
           const p = S.people[is.pid];
           const deal = S.deals.find(d => d.id === is.dealId);
           const opts = E.issueOptions(S, is.id);
-          const what = is.type === 'usage' ? 'Питання щодо користування' : is.diagnosed && is.defect ? 'Дефект: ' + is.defect.name : 'Несправність, причина невідома';
+          const what = is.type === 'usage' ? 'Питання щодо користування' : is.diagnosed && is.defect ? 'Дефект: ' + is.defect.name : is.explained ? 'Несправність: пояснення не допомогло, потрібна перевірка' : 'Несправність, причина невідома';
           b += `<div class="card ${is.expired ? 'warn' : ''}">${personRow(p, `<div class="muted">${esc(what)} · ${C.FAM[deal.fam].short}. ${is.expired ? '<b>Прострочено!</b>' : 'Відповісти до ' + esc(E.dateStr(is.due, false))}${deal.liability ? ' · ви запевняли, що машина справна' : ''}</div>`)}
             <div class="chs" style="margin-top:8px">${opts.map(o => `<button class="btn small left ${o.cost ? 'confirm' : ''}" data-act="service" data-i="${is.id}" data-o="${o.id}">${esc(o.label)} <span class="cost">1 од.</span></button>`).join('')}</div></div>`;
         }
@@ -8693,12 +8730,14 @@ const SND = (function () {
         : { cost: 'з рівня 3', dis: true }) },
       study: { done: c.studied, act: !c.studied && { cost: '1 од.' } }
     };
+    // Машина в механіка (ремонт чи огляд) — мити й фотографувати нічого: плитки чекають її повернення
+    const away = c.status === 'repair' ? 'після ремонту' : c.status === 'inspect' ? 'після огляду' : null;
     if (S.up.wash) {
       // Мийка тримається до c.washed включно; знову помити можна лише в останній чистий день (на завтра) або коли машина брудна
       const left = c.washed - S.day;
-      st.wash = { done: left >= 0, note: left > 0 ? 'ще ' + left + ' ' + plural(left, 'день', 'дні', 'днів') : left === 0 ? 'до вечора' : '', act: left <= 0 && { cost: '5 $ · 1 од.', confirm: true } };
+      st.wash = { done: left >= 0, note: left > 0 ? 'ще ' + left + ' ' + plural(left, 'день', 'дні', 'днів') : left === 0 ? 'до вечора' : '', act: left <= 0 && (away ? { cost: away, dis: true } : { cost: '5 $ · 1 од.', confirm: true }) };
     }
-    if (!daily) st.photo = { done: c.photo, act: !c.photo && { cost: '1 од.' } };
+    if (!daily) st.photo = { done: c.photo, act: !c.photo && (away ? { cost: away, dis: true } : { cost: '1 од.' }) };
     if (S.flags.belts) st.belts = { done: c.belts, act: !c.belts && c.status === 'stock' && { cost: $$(E.beltCost(S)) + ' · 1 од.', confirm: true } };
     return PREP.filter(p => st[p[0]]).map(([k, img, lab, labDone, full]) => {
       const s = st[k];
@@ -8783,7 +8822,7 @@ const SND = (function () {
         ${condHTML(c, kd)}`;
     if (kd.length) h += `<div class="defs">${kd.map(d => {
       const idx = c.defects.indexOf(d);
-      return `<div class="def ${d.sev === 'major' ? 'major' : ''}">${badge(defIco(d))}<div class="grow">${esc(d.name)}${d.fixing ? ' — у ремонті' : ''}</div>${d.fixing ? '' : d.nofix ? '<span class="chip amber">Не ремонтується</span>' : `<button class="btn small confirm" data-act="repair" data-c="${c.id}" data-i="${idx}" ${mech && c.status === 'stock' ? '' : 'disabled'}>Ремонт ${$$(d.cost)}</button>`}</div>`;
+      return `<div class="def ${d.sev === 'major' ? 'major' : ''}">${badge(defIco(d))}<div class="grow">${esc(d.name)}${d.fixing ? ' — у ремонті' : ''}</div>${d.fixing ? '' : d.nofix ? '<span class="chip amber">Не ремонтується</span>' : `<button class="btn small confirm" data-act="repair" data-c="${c.id}" data-i="${idx}" ${mech && (c.status === 'stock' || c.status === 'reserved') ? '' : 'disabled'}>Ремонт ${$$(d.cost)}</button>`}</div>`;
     }).join('')}</div>`;
     h += `<div class="lbl">Підготовка</div><div class="ptiles n${steps.length}">${steps.map(t => prepTile(c, t)).join('')}</div>`;
     if (c.status === 'incoming') h += '<p class="muted ltip">Підготувати машину можна, коли вона прибуде.</p>';
@@ -9764,7 +9803,7 @@ const SND = (function () {
     try { f(el.dataset, e); } catch (err) { console.error(err); toast('Помилка: ' + err.message, 'err'); }
   });
   window.addEventListener('resize', () => { if (S) renderScene(); else fitTitle(); });
-  window.__game = { get S() { return S; }, E, UI, ACT, refresh };
+  window.__game = { get S() { return S; }, E, UI, ACT, refresh, nextTask };
 
   title();
 })();
