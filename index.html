@@ -222,7 +222,7 @@ img { display: block; max-width: 100%; }
 /* Бульбашка-підказка біля речі наступної справи (для людей і машин у вікні — під вікном) */
 .tipb { position: absolute; z-index: 6; max-width: min(232px, 68%); padding: 6px 10px; border: 0; border-radius: 11px; background: #FFF8E6; color: var(--ink);
   font: italic 500 13.5px/1.28 'Lora', Georgia, serif; text-align: left; box-shadow: 0 5px 14px rgba(0, 0, 0, .33); cursor: pointer;
-  animation: tipin .45s cubic-bezier(.2, 1.2, .4, 1) both, tipout .7s ease 9s forwards; }
+  animation: tipin .45s cubic-bezier(.2, 1.2, .4, 1) both, tipout .6s ease 5s forwards; }
 /* Прочитали — і бульбашка тихо зникає: головна кнопка й світло на речі лишаються */
 @keyframes tipout { to { opacity: 0; transform: translateY(-4px); visibility: hidden; } }
 .tipb b { font-style: normal; }
@@ -538,8 +538,12 @@ table.ledger td.n { text-align: right; white-space: nowrap; padding-left: 8px; f
 
 /* ---------- Сповіщення ---------- */
 .toasts { position: absolute; z-index: 40; left: 0; right: 0; top: calc(64px + var(--safe-t)); display: grid; justify-items: center; gap: 6px; pointer-events: none; padding: 0 12px; }
-.toast { pointer-events: none; }
-.toast { max-width: 440px; background: #FFF6DC; color: var(--ink); padding: 9px 14px; border-radius: 6px; box-shadow: 0 6px 16px rgba(0, 0, 0, .35); font-size: 15px; line-height: 1.35; animation: toast .25s ease; transform: rotate(-.4deg); }
+.toasts.low { top: auto; align-content: end; }
+.toast { pointer-events: auto; cursor: pointer; max-width: 420px; background: #FFF6DC; color: var(--ink); padding: 7px 12px; border-radius: 6px; box-shadow: 0 6px 16px rgba(0, 0, 0, .35); font-size: 14px; line-height: 1.32; animation: toast .25s ease; transform: rotate(-.4deg); transition: opacity .25s ease, transform .25s ease; }
+.toast.out { opacity: 0; transform: translateY(-6px) rotate(-.4deg); }
+.toasts.low .toast { animation-name: toastup; }
+.toasts.low .toast.out { transform: translateY(6px) rotate(-.4deg); }
+@keyframes toastup { from { transform: translateY(10px); opacity: 0; } }
 .toast.err { background: #FFE2D6; border-left: 4px solid var(--cherry); }
 .toast.money { background: #E3F4EF; border-left: 4px solid var(--turq-d); }
 @keyframes toast { from { transform: translateY(-10px); opacity: 0; } }
@@ -7475,16 +7479,25 @@ const SND = (function () {
     }
     S.fx = [];
   }
+  // Сповіщення: коротко, не закриває майданчик. Над конторою — унизу, над головною кнопкою; над аркушем чи карткою — згори.
+  // Нове замінює старе; дотик до сповіщення чи будь-яка дія прибирає його. info — подробиці, які людина сама відкрила (довше).
+  function fadeToast(d) { if (!d || d.classList.contains('out')) return; d.classList.add('out'); setTimeout(() => d.remove(), 260); }
   function toast(text, kind) {
     const t = $('#toasts'); if (!t || !text) return;
+    for (const o of [...t.children]) fadeToast(o);
     const d = document.createElement('div');
     d.className = 'toast ' + (kind || '');
-    d.onclick = () => d.remove();
+    d.onclick = e => { e.stopPropagation(); fadeToast(d); };
     d.setAttribute('role', 'status');
     d.textContent = typo(String(text));
+    const dock = $('#dock');
+    const low = !!(S && S.mode !== 'daily' && dock && !UI.sheet && !UI.modalLocal && !S.meet && !(S.cards && S.cards.length));
+    t.classList.toggle('low', low);
+    t.style.bottom = low ? (dock.offsetHeight + 10) + 'px' : '';
     t.appendChild(d);
-    while (t.children.length > 3) t.firstChild.remove();
-    setTimeout(() => d.remove(), Math.min(6500, 2400 + text.length * 35));
+    const ms = kind === 'info' ? Math.min(6500, 2000 + text.length * 30) : Math.min(4000, 1400 + text.length * 26);
+    UI.toastEnd = Date.now() + ms;
+    setTimeout(() => fadeToast(d), ms);
   }
   function floaty(text, good) {
     const col = $('#col'); if (!col) return;
@@ -8014,9 +8027,20 @@ const SND = (function () {
   function placeTip(sc, task, visible) {
     const old = sc.querySelector('.tipb'); if (old) old.remove();
     if (!task || task.end || !task.hint || !visible) return;
+    // Пояснення до справи показуємо раз на день; далі лишаються світло на речі й напис на кнопці
+    UI.tipSeen = UI.tipSeen || {};
+    if (UI.tipSeen[task.key] === S.day) return;
+    // Поки видно сповіщення — бульбашка чекає, щоб не було двох підказок разом
+    const wait = (UI.toastEnd || 0) - Date.now();
+    if (wait > 0) {
+      clearTimeout(UI.tipT);
+      UI.tipT = setTimeout(() => { if (UI.task === task && sc.isConnected && !UI.sheet && !UI.modalLocal && !S.meet && !S.cards.length) placeTip(sc, task, true); }, wait + 250);
+      return;
+    }
     const el = sc.querySelector('.fig.focus, .car.focus, .item.focus'); if (!el) return;
     const r = el.getBoundingClientRect(), R = sc.getBoundingClientRect();
     if (r.width < 2 || r.bottom < R.top || r.top > R.bottom) return;
+    UI.tipSeen[task.key] = S.day;
     const b = document.createElement('button');
     b.className = 'tipb'; b.dataset.act = 'task'; b.innerHTML = task.hint;
     sc.appendChild(b);
@@ -9546,7 +9570,7 @@ const SND = (function () {
     sheet: d => openSheet(d.s, d.a),
     close: () => closeSheet(),
     veil: (d, e) => { if (e.target.classList.contains('veil')) closeSheet(); },
-    decor: d => toast(d.t),
+    decor: d => toast(d.t, 'info'),
     radio: () => { SND.setMusic(!SND.pref.music); toast(SND.pref.music ? 'Радіо: тихий джаз.' : 'Радіо вимкнено.'); if (S) refresh(); else title(); },
     sfx: () => { SND.setSfx(!SND.pref.sfx); refresh(); },
     endday: () => endDayFlow(false),
@@ -9568,10 +9592,10 @@ const SND = (function () {
       const ph = E.wallData(S).photos.find(x => x.dealId === d.d);
       if (!ph) return;
       const p = S.people[ph.pid];
-      toast(ph.name + ' · ' + ph.car + ' · ' + dayY(ph.day) + (ph.then ? ' · тоді — ' + ph.then.car + ', ' + ph.then.year : '') + (ph.gen2 ? ' · друге покоління' : '') + (ph.sat != null ? ' · задоволеність ' + ph.sat : ' · відгук ще попереду') + (ph.refs ? ' · ' + E.pv(p, 'привів') + ' ' + ph.refs + ' ' + (ph.refs === 1 ? 'покупця' : 'покупців') : '') + (ph.ref ? ' · ' + E.pv(p, 'прийшов') + ' за рекомендацією: ' + ph.ref : '') + (ph.quote ? ' · «' + ph.quote + '»' : ''));
+      toast(ph.name + ' · ' + ph.car + ' · ' + dayY(ph.day) + (ph.then ? ' · тоді — ' + ph.then.car + ', ' + ph.then.year : '') + (ph.gen2 ? ' · друге покоління' : '') + (ph.sat != null ? ' · задоволеність ' + ph.sat : ' · відгук ще попереду') + (ph.refs ? ' · ' + E.pv(p, 'привів') + ' ' + ph.refs + ' ' + (ph.refs === 1 ? 'покупця' : 'покупців') : '') + (ph.ref ? ' · ' + E.pv(p, 'прийшов') + ' за рекомендацією: ' + ph.ref : '') + (ph.quote ? ' · «' + ph.quote + '»' : ''), 'info');
     },
     oldpaper: d => oldPaper(+d.day),
-    wallmm: d => { const m = E.wallData(S).mementos[+d.i]; if (m) toast(C.MEMENTOS[m.k].name + ': ' + m.t); },
+    wallmm: d => { const m = E.wallData(S).mementos[+d.i]; if (m) toast(C.MEMENTOS[m.k].name + ': ' + m.t, 'info'); },
     pickcat: (d, e) => { e.stopPropagation(); UI.pick[d.p] = d.c; renderSheet(); },
     call: (d, e) => {
       e.stopPropagation();
@@ -9716,6 +9740,9 @@ const SND = (function () {
   };
   document.addEventListener('click', e => {
     SND.unlock && SND.unlock();
+    // Будь-який дотик — людина вже рухається далі: сповіщення й бульбашка зникають
+    if (!e.target.closest('.toast')) document.querySelectorAll('#toasts .toast').forEach(fadeToast);
+    document.querySelectorAll('.tipb').forEach(b => { if (!b.contains(e.target)) b.remove(); });
     const el = e.target.closest('[data-act]');
     if (!el || el.disabled) return;
     const f = ACT[el.dataset.act];
